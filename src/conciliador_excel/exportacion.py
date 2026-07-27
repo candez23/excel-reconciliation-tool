@@ -7,7 +7,6 @@ from io import BytesIO
 import pandas as pd
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from .reconciliacion import ResultadoConciliacion
 
@@ -27,6 +26,8 @@ COLOR_ACENTO = "3C8DBC"
 COLOR_TEXTO = "F2F6F8"
 COLOR_BORDE = "496274"
 COLOR_ALERTA = "6B3940"
+COLOR_FILA_ALTERNA = "EAF1F5"
+COLOR_BORDE_DATOS = "D6E0E7"
 
 
 def _ancho_columna(hoja, indice: int) -> float:
@@ -47,10 +48,11 @@ def _proteger_texto_formula(hoja) -> None:
                 celda.data_type = "s"
 
 
-def _formatear_hoja(hoja, nombre_tabla: str) -> None:
+def _formatear_hoja(hoja) -> None:
     hoja.freeze_panes = "A2"
     hoja.sheet_view.showGridLines = False
     hoja.row_dimensions[1].height = 28
+    hoja.auto_filter.ref = hoja.dimensions if hoja.max_row >= 2 else None
 
     relleno = PatternFill("solid", fgColor=COLOR_ENCABEZADO)
     borde = Border(bottom=Side(style="thin", color=COLOR_BORDE))
@@ -65,9 +67,14 @@ def _formatear_hoja(hoja, nombre_tabla: str) -> None:
             hoja, indice
         )
 
+    relleno_alterno = PatternFill("solid", fgColor=COLOR_FILA_ALTERNA)
+    borde_datos = Border(bottom=Side(style="hair", color=COLOR_BORDE_DATOS))
     for fila in hoja.iter_rows(min_row=2):
         for celda in fila:
             celda.alignment = Alignment(vertical="top")
+            celda.border = borde_datos
+            if celda.row % 2 == 0:
+                celda.fill = relleno_alterno
             if celda.column_letter and (
                 "Importe" in str(hoja.cell(1, celda.column).value)
                 or "Diferencia" in str(hoja.cell(1, celda.column).value)
@@ -78,23 +85,13 @@ def _formatear_hoja(hoja, nombre_tabla: str) -> None:
 
     _proteger_texto_formula(hoja)
 
-    if hoja.max_row >= 2 and hoja.max_column >= 1:
-        tabla = Table(displayName=nombre_tabla, ref=hoja.dimensions)
-        tabla.tableStyleInfo = TableStyleInfo(
-            name="TableStyleMedium2",
-            showFirstColumn=False,
-            showLastColumn=False,
-            showRowStripes=True,
-            showColumnStripes=False,
-        )
-        hoja.add_table(tabla)
-
 
 def _resaltar_diferencias(hoja) -> None:
     relleno_alerta = PatternFill("solid", fgColor=COLOR_ALERTA)
     for fila in hoja.iter_rows(min_row=2):
         for celda in fila:
             celda.fill = relleno_alerta
+            celda.font = Font(color=COLOR_TEXTO)
 
 
 def exportar_excel(resultado: ResultadoConciliacion) -> bytes:
@@ -114,12 +111,12 @@ def exportar_excel(resultado: ResultadoConciliacion) -> bytes:
             tabla.to_excel(escritor, sheet_name=nombre, index=False)
 
         libro = escritor.book
-        for indice, nombre in enumerate(NOMBRES_HOJAS, start=1):
+        for nombre in NOMBRES_HOJAS:
             hoja = libro[nombre]
             hoja.sheet_properties.tabColor = (
                 COLOR_ACENTO if nombre == "Resumen" else COLOR_ENCABEZADO
             )
-            _formatear_hoja(hoja, f"Tabla{indice}")
+            _formatear_hoja(hoja)
 
         _resaltar_diferencias(libro["Diferencias"])
         libro["Resumen"].sheet_properties.pageSetUpPr.fitToPage = True

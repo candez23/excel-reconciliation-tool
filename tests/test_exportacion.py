@@ -1,4 +1,5 @@
 from io import BytesIO
+from xml.etree import ElementTree
 from zipfile import ZipFile
 
 import pandas as pd
@@ -38,38 +39,58 @@ def test_exporta_las_seis_hojas_con_nombres_exactos_y_formato():
     libro = load_workbook(BytesIO(contenido))
 
     assert tuple(libro.sheetnames) == NOMBRES_HOJAS
-    nombres_tablas = set()
     for nombre in NOMBRES_HOJAS:
         hoja = libro[nombre]
         assert hoja.freeze_panes == "A2"
         assert hoja.sheet_view.showGridLines is False
         assert hoja["A1"].font.bold is True
         assert hoja["A1"].fill.fgColor.rgb.endswith("1D3448")
-        assert hoja.auto_filter.ref is None
-
-        assert len(hoja.tables) == 1
-        tabla = next(iter(hoja.tables.values()))
-        assert tabla.displayName not in nombres_tablas
-        nombres_tablas.add(tabla.displayName)
-        assert tabla.ref == hoja.dimensions
-        assert tabla.autoFilter.ref == tabla.ref
+        color_fila = (
+            "6B3940" if nombre == "Diferencias" else "EAF1F5"
+        )
+        assert hoja["A2"].fill.fgColor.rgb.endswith(color_fila)
+        assert len(hoja.tables) == 0
+        assert hoja.auto_filter.ref == hoja.dimensions
 
         columna_inicial, fila_inicial, columna_final, fila_final = range_boundaries(
-            tabla.ref
+            hoja.auto_filter.ref
         )
         assert fila_inicial == 1
         assert fila_final >= 2
         assert columna_final >= columna_inicial
-
-        encabezados = [columna.name for columna in tabla.tableColumns]
-        assert all(encabezado.strip() for encabezado in encabezados)
-        assert len(encabezados) == len(set(encabezados))
     assert libro["Resumen"].max_row > 2
     assert libro["Diferencias"].max_row == 2
 
 
-def test_no_duplica_filtros_de_hoja_y_tabla_en_el_ooxml():
+def test_ooxml_no_contiene_objetos_ni_relaciones_de_tabla():
     contenido = exportar_excel(_resultado_ejemplo())
+
+    with ZipFile(BytesIO(contenido)) as archivo:
+        nombres = archivo.namelist()
+        hojas_xml = [
+            nombre
+            for nombre in nombres
+            if nombre.startswith("xl/worksheets/sheet") and nombre.endswith(".xml")
+        ]
+        relaciones_xml = [
+            nombre
+            for nombre in nombres
+            if nombre.endswith(".rels")
+        ]
+
+        assert len(hojas_xml) == len(NOMBRES_HOJAS)
+        assert not any(nombre.startswith("xl/tables/") for nombre in nombres)
+        assert not any(
+            relacion.attrib.get("Type", "").endswith("/table")
+            or "/tables/" in relacion.attrib.get("Target", "")
+            for nombre in relaciones_xml
+            for relacion in ElementTree.fromstring(archivo.read(nombre))
+        )
+
+
+def test_filtros_de_hoja_tienen_el_mismo_rango_valido_que_los_datos():
+    contenido = exportar_excel(_resultado_ejemplo())
+    namespace = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
     with ZipFile(BytesIO(contenido)) as archivo:
         hojas_xml = [
@@ -77,16 +98,33 @@ def test_no_duplica_filtros_de_hoja_y_tabla_en_el_ooxml():
             for nombre in archivo.namelist()
             if nombre.startswith("xl/worksheets/sheet") and nombre.endswith(".xml")
         ]
-        tablas_xml = [
-            nombre
-            for nombre in archivo.namelist()
-            if nombre.startswith("xl/tables/table") and nombre.endswith(".xml")
-        ]
+        for nombre in hojas_xml:
+            raiz = ElementTree.fromstring(archivo.read(nombre))
+            dimension = raiz.find("x:dimension", namespace)
+            filtro = raiz.find("x:autoFilter", namespace)
 
-        assert len(hojas_xml) == len(NOMBRES_HOJAS)
-        assert len(tablas_xml) == len(NOMBRES_HOJAS)
-        assert all(b"<autoFilter" not in archivo.read(nombre) for nombre in hojas_xml)
-        assert all(b"<autoFilter" in archivo.read(nombre) for nombre in tablas_xml)
+            assert dimension is not None
+            assert filtro is not None
+            assert filtro.attrib["ref"] == dimension.attrib["ref"]
+            _, fila_inicial, _, fila_final = range_boundaries(filtro.attrib["ref"])
+            assert fila_inicial == 1
+            assert fila_final >= 2
+
+
+def test_hojas_sin_registros_no_reciben_un_filtro_vacio():
+    datos_a = pd.DataFrame({"Clave": ["A-1"]})
+    datos_b = pd.DataFrame({"Referencia": ["A-1"]})
+    resultado = conciliar_archivos(datos_a, datos_b, "Clave", "Referencia")
+
+    contenido = exportar_excel(resultado)
+    libro = load_workbook(BytesIO(contenido))
+
+    for hoja in libro.worksheets:
+        if hoja.max_row == 1:
+            assert hoja.auto_filter.ref is None
+        else:
+            assert hoja.auto_filter.ref == hoja.dimensions
+        assert len(hoja.tables) == 0
 
 
 def test_valores_que_parecen_formula_se_exportan_como_texto():
