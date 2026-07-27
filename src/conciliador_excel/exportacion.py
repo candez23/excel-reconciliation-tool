@@ -50,7 +50,6 @@ def _proteger_texto_formula(hoja) -> None:
 def _formatear_hoja(hoja, nombre_tabla: str) -> None:
     hoja.freeze_panes = "A2"
     hoja.sheet_view.showGridLines = False
-    hoja.auto_filter.ref = hoja.dimensions
     hoja.row_dimensions[1].height = 28
 
     relleno = PatternFill("solid", fgColor=COLOR_ENCABEZADO)

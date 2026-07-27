@@ -1,7 +1,9 @@
 from io import BytesIO
+from zipfile import ZipFile
 
 import pandas as pd
 from openpyxl import load_workbook
+from openpyxl.utils.cell import range_boundaries
 
 from conciliador_excel.exportacion import NOMBRES_HOJAS, exportar_excel
 from conciliador_excel.reconciliacion import conciliar_archivos
@@ -36,14 +38,55 @@ def test_exporta_las_seis_hojas_con_nombres_exactos_y_formato():
     libro = load_workbook(BytesIO(contenido))
 
     assert tuple(libro.sheetnames) == NOMBRES_HOJAS
+    nombres_tablas = set()
     for nombre in NOMBRES_HOJAS:
         hoja = libro[nombre]
         assert hoja.freeze_panes == "A2"
         assert hoja.sheet_view.showGridLines is False
         assert hoja["A1"].font.bold is True
         assert hoja["A1"].fill.fgColor.rgb.endswith("1D3448")
+        assert hoja.auto_filter.ref is None
+
+        assert len(hoja.tables) == 1
+        tabla = next(iter(hoja.tables.values()))
+        assert tabla.displayName not in nombres_tablas
+        nombres_tablas.add(tabla.displayName)
+        assert tabla.ref == hoja.dimensions
+        assert tabla.autoFilter.ref == tabla.ref
+
+        columna_inicial, fila_inicial, columna_final, fila_final = range_boundaries(
+            tabla.ref
+        )
+        assert fila_inicial == 1
+        assert fila_final >= 2
+        assert columna_final >= columna_inicial
+
+        encabezados = [columna.name for columna in tabla.tableColumns]
+        assert all(encabezado.strip() for encabezado in encabezados)
+        assert len(encabezados) == len(set(encabezados))
     assert libro["Resumen"].max_row > 2
     assert libro["Diferencias"].max_row == 2
+
+
+def test_no_duplica_filtros_de_hoja_y_tabla_en_el_ooxml():
+    contenido = exportar_excel(_resultado_ejemplo())
+
+    with ZipFile(BytesIO(contenido)) as archivo:
+        hojas_xml = [
+            nombre
+            for nombre in archivo.namelist()
+            if nombre.startswith("xl/worksheets/sheet") and nombre.endswith(".xml")
+        ]
+        tablas_xml = [
+            nombre
+            for nombre in archivo.namelist()
+            if nombre.startswith("xl/tables/table") and nombre.endswith(".xml")
+        ]
+
+        assert len(hojas_xml) == len(NOMBRES_HOJAS)
+        assert len(tablas_xml) == len(NOMBRES_HOJAS)
+        assert all(b"<autoFilter" not in archivo.read(nombre) for nombre in hojas_xml)
+        assert all(b"<autoFilter" in archivo.read(nombre) for nombre in tablas_xml)
 
 
 def test_valores_que_parecen_formula_se_exportan_como_texto():
