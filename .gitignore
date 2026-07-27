@@ -1,0 +1,26 @@
+# Entorno local
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Archivos temporales y exportaciones
+*.tmp
+*.log
+salidas/
+~$*.xlsx
+
+# Editores y sistema
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Streamlit local
+.streamlit/secrets.toml
